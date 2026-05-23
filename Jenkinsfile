@@ -1,65 +1,56 @@
-
-pipeline{
-    
-    agent { label "dev"};
-    
-    stages{
-        stage("Code Clone"){
-            steps{
-               script{
-                   clone("https://github.com/LondheShubham153/two-tier-flask-app.git", "master")
-               }
+pipeline {
+    agent any
+    environment {
+        DOCKER_IMAGE = 'genesisdada/flask-app'
+        DOCKER_TAG   = "${BUILD_NUMBER}"
+    }
+    stages {
+        stage('Code Fetch') {
+            steps {
+                echo 'Fetching latest code from GitHub...'
+                git branch: 'master',
+                    url: 'https://github.com/DaniyalAhmed-kh/two-tier-flask-app.git'
             }
         }
-        stage("Trivy File System Scan"){
-            steps{
-                script{
-                    trivy_fs()
+        stage('Docker Image Creation') {
+            steps {
+                script {
+                    sh "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} ."
+                    sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
+                        sh "docker push ${DOCKER_IMAGE}:${DOCKER_TAG}"
+                        sh "docker push ${DOCKER_IMAGE}:latest"
+                    }
                 }
             }
         }
-        stage("Build"){
-            steps{
-                sh "docker build -t two-tier-flask-app ."
-            }
-            
-        }
-        stage("Test"){
-            steps{
-                echo "Developer / Tester tests likh ke dega..."
-            }
-            
-        }
-        stage("Push to Docker Hub"){
-            steps{
-                script{
-                    docker_push("dockerHubCreds","two-tier-flask-app")
-                }  
+        stage('Kubernetes Deployment') {
+            steps {
+                script {
+                    sh 'kubectl apply -f k8s/mysql-secret.yml'
+                    sh 'kubectl apply -f k8s/mysql-deployment.yml'
+                    sh 'kubectl apply -f k8s/mysql-service.yml'
+                    sh 'kubectl apply -f k8s/flask-deployment.yml'
+                    sh 'kubectl apply -f k8s/flask-service.yml'
+                    sh 'kubectl rollout status deployment/flaskapp --timeout=120s'
+                    sh 'kubectl get pods'
+                    sh 'kubectl get svc'
+                }
             }
         }
-        stage("Deploy"){
-            steps{
-                sh "docker compose up -d --build flask-app"
+        stage('Prometheus/Grafana Monitoring') {
+            steps {
+                script {
+                    sh 'kubectl get pods -n monitoring'
+                    sh 'kubectl apply -f k8s/flask-servicemonitor.yml'
+                    sh 'kubectl get svc -n monitoring'
+                }
             }
         }
     }
-
-post{
-        success{
-            script{
-                emailext from: 'mentor@trainwithshubham.com',
-                to: 'mentor@trainwithshubham.com',
-                body: 'Build success for Demo CICD App',
-                subject: 'Build success for Demo CICD App'
-            }
-        }
-        failure{
-            script{
-                emailext from: 'mentor@trainwithshubham.com',
-                to: 'mentor@trainwithshubham.com',
-                body: 'Build Failed for Demo CICD App',
-                subject: 'Build Failed for Demo CICD App'
-            }
-        }
+    post {
+        success { echo 'Pipeline completed successfully!' }
+        failure { echo 'Pipeline failed.' }
     }
 }
